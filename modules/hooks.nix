@@ -175,6 +175,18 @@ in
             };
 
         };
+
+      yamllint =
+        {
+          configPath =
+            mkOption {
+              type = types.str;
+              description = "path to the configuration YAML file";
+              # an empty string translates to use default configuration of the
+              # underlying binary
+              default = "";
+            };
+        };
     };
 
   config.hooks =
@@ -452,7 +464,14 @@ in
           name = "yamllint";
           description = "Yaml linter.";
           types = [ "file" "yaml" ];
-          entry = "${tools.yamllint}/bin/yamllint";
+          entry =
+            let
+              cmdArgs =
+                mkCmdArgs [
+                  [ (settings.yamllint.configPath != "") "-c ${settings.yamllint.configPath}" ]
+                ];
+            in
+            "${tools.yamllint}/bin/yamllint ${cmdArgs}";
         };
       rustfmt =
         let
