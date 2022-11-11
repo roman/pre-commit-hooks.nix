@@ -33,6 +33,15 @@
 
         checks = exposed.checks;
 
+        devShells.default =
+          let
+            pkgs = import nixpkgs { inherit system; };
+          in
+          pkgs.mkShell {
+            buildInputs = [ pkgs.niv ];
+            inherit (exposed.checks.pre-commit-check) shellHook;
+          };
+
         lib = { inherit (exposed) run; };
       }
     );
