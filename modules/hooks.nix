@@ -508,6 +508,42 @@ in
             };
         };
 
+      govet =
+        {
+          goModPath =
+            mkOption {
+              type = types.str;
+              description = lib.mdDoc "Path where go.mod is located (defaults to repo root).";
+              default = ".";
+            };
+        };
+
+      gotest =
+        {
+          importGcc =
+            mkOption {
+              type = types.bool;
+              description = lib.mdDoc "Use gcc in the environment to compile sources.";
+              default = false;
+            };
+          goModPath =
+            mkOption {
+              type = types.str;
+              description = lib.mdDoc "Path where go.mod is located (defaults to repo root).";
+              default = ".";
+            };
+        };
+
+      staticcheck =
+        {
+          goModPath =
+            mkOption {
+              type = types.str;
+              description = lib.mdDoc "Path where go.mod is located (defaults to repo root).";
+              default = ".";
+            };
+        };
+
       phpcs =
         {
           binPath =
@@ -1574,11 +1610,28 @@ in
           description = "Checks correctness of Go programs.";
           entry =
             let
+              goModPath =
+                if settings.govet.goModPath != "" then
+                  "${settings.govet.goModPath}"
+                else
+                  "";
+              #
               # go vet requires package (directory) names as inputs.
               script = pkgs.writeShellScript "precommit-govet" ''
                 set -e
-                for dir in $(echo "$@" | xargs -n1 dirname | sort -u); do
-                  ${tools.go}/bin/go vet ./"$dir"
+                goModPath="${goModPath}"
+
+                dirs=()
+                for absDir in $(echo "$@" | xargs -n1 dirname | sort -u); do
+                  relDir="$(${pkgs.coreutils}/bin/realpath --relative-to "$goModPath" "$absDir")"
+                  dirs+=("$relDir")
+                done
+
+
+                pushd "$goModPath" &> /dev/null || exit 1
+                for dir in ''${dirs[@]}; do
+                  # use relative path from the goModPath
+                  ${tools.go}/bin/go vet "./$dir"
                 done
               '';
             in
@@ -1594,14 +1647,35 @@ in
         description = "Run go tests";
         entry =
           let
+            goModPath =
+              if settings.gotest.goModPath != "" then
+                "${settings.govet.goModPath}"
+              else
+                "";
+
+            pathPkgs =
+              if settings.gotest.importGcc then
+                [ pkgs.gcc tools.go pkgs.coreutils ]
+              else
+                [ tools.go pkgs.coreutils ];
+
+
             script = pkgs.writeShellScript "precommit-gotest" ''
               set -e
+
+              export PATH="${lib.makeBinPath pathPkgs}"
+
+              # get the go.mod directory
+              goModPath="${goModPath}"
+
               # find all directories that contain tests
               dirs=()
               for file in "$@"; do
                 # either the file is a test
                 if [[ "$file" = *_test.go ]]; then
-                  dirs+=("$(dirname "$file")")
+                  absDir="$(dirname "$file")"
+                  relDir="$(realpath --relative-to "$goModPath" "$absDir")"
+                  dirs+=("$relDir")
                   continue
                 fi
 
@@ -1609,7 +1683,9 @@ in
                 filename="''${file%.go}"
                 test_file="''${filename}_test.go"
                 if [[ -f "$test_file"  ]]; then
-                  dirs+=("$(dirname "$test_file")")
+                  absDir="$(dirname "$file")"
+                  relDir="$(realpath --relative-to "$goModPath" "$absDir")"
+                  dirs+=("$relDir")
                   continue
                 fi
               done
@@ -1617,9 +1693,12 @@ in
               # ensure we are not duplicating dir entries
               IFS=$'\n' sorted_dirs=($(sort -u <<<"''${dirs[*]}")); unset IFS
 
+              # run tests inside the go.mod sub-directory
+              pushd "$goModPath" &> /dev/null || exit 1
+
               # test each directory one by one
               for dir in "''${sorted_dirs[@]}"; do
-                  ${tools.go}/bin/go test "./$dir"
+                  go test "./$dir"
               done
             '';
           in
@@ -1638,10 +1717,11 @@ in
             let
               script = pkgs.writeShellScript "precommit-gofmt" ''
                 set -e
+                export PATH="${lib.makeBinPath [ tools.go ]}"
                 failed=false
                 for file in "$@"; do
                     # redirect stderr so that violations and summaries are properly interleaved.
-                    if ! ${tools.go}/bin/gofmt -l -w "$file" 2>&1
+                    if ! gofmt -l -w "$file" 2>&1
                     then
                         failed=true
                     fi
@@ -1672,8 +1752,9 @@ in
               # directories from each individual file.
               script = pkgs.writeShellScript "precommit-revive" ''
                 set -e
+                export PATH="${lib.makeBinPath [ tools.revive pkgs.findutils pkgs.coreutils ]}"
                 for dir in $(echo "$@" | xargs -n1 dirname | sort -u); do
-                  ${tools.revive}/bin/revive ${cmdArgs} ./"$dir"
+                  revive ${cmdArgs} ./"$dir"
                 done
               '';
             in
@@ -1691,10 +1772,27 @@ in
           # staticheck works with directories.
           entry =
             let
+              goModPath =
+                if settings.govet.goModPath != "" then
+                  "${settings.govet.goModPath}"
+                else
+                  "";
+
               script = pkgs.writeShellScript "precommit-staticcheck" ''
                 err=0
-                for dir in $(echo "$@" | xargs -n1 dirname | sort -u); do
-                  ${tools.go-tools}/bin/staticcheck ./"$dir"
+                goModPath="${goModPath}"
+
+                export PATH="${lib.makeBinPath [ tools.go tools.go-tools pkgs.findutils pkgs.coreutils ]}"
+
+                dirs=()
+                for absDir in $(echo "$@" | xargs -n1 dirname | sort -u); do
+                  relDir="$(realpath --relative-to "$goModPath" "$absDir")"
+                  dirs+=("$relDir")
+                done
+
+                pushd $goModPath &> /dev/null || exit 1
+                for dir in ''${dirs[@]}; do
+                  staticcheck "./$dir"
                   code="$?"
                   if [[ "$err" -eq 0 ]]; then
                      err="$code"
